@@ -246,10 +246,6 @@ function WebViewScreen() {
         onLoadEnd={() => setLoading(false)}
         onError={() => { setLoading(false); setError(true); }}
         onHttpError={(e) => { if (e.nativeEvent.statusCode >= 500) { setError(true); setLoading(false); } }}
-        onGeolocationPermissionsShowPrompt={(origin, callback) => {
-          // Grant geolocation to all origins so navigator.geolocation works in WebView
-          callback(origin, true, false);
-        }}
         onMessage={handleMessage}
         userAgent={`TaxiImpulseApp/1.0 (${Platform.OS})`}
         sharedCookiesEnabled
