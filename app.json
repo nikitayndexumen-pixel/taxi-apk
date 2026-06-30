@@ -50,9 +50,12 @@
         {
           "icon": "./assets/images/icon.png",
           "color": "#7c3aed",
-          "sounds": ["./assets/notification.mp3"]
+          "sounds": [
+            "./assets/notification.mp3"
+          ]
         }
-      ]
+      ],
+      "react-native-pip-mode"
     ]
   }
 }
