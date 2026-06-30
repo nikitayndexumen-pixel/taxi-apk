@@ -118,6 +118,8 @@ function WebViewScreen() {
   const [canGoBack, setCanGoBack] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const hasLoadedRef = useRef(false);
+  const loadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const driverBubbleActiveRef = useRef(false);
   const driverBubbleCountRef = useRef(0);
@@ -242,10 +244,20 @@ function WebViewScreen() {
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
         onNavigationStateChange={(nav: WebViewNavigation) => setCanGoBack(nav.canGoBack)}
-        onLoadStart={() => { setLoading(true); setError(false); }}
-        onLoadEnd={() => setLoading(false)}
-        onError={() => { setLoading(false); setError(true); }}
-        onHttpError={(e) => { if (e.nativeEvent.statusCode >= 500) { setError(true); setLoading(false); } }}
+        onLoadStart={() => {
+          if (hasLoadedRef.current) return; // after first load, don't block UI again
+          setLoading(true);
+          setError(false);
+          if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
+          loadingTimerRef.current = setTimeout(() => setLoading(false), 8000);
+        }}
+        onLoadEnd={() => {
+          if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
+          hasLoadedRef.current = true;
+          setLoading(false);
+        }}
+        onError={() => { setLoading(false); setError(!hasLoadedRef.current); }}
+        onHttpError={(e) => { if (e.nativeEvent.statusCode >= 500 && !hasLoadedRef.current) { setError(true); setLoading(false); } }}
         onMessage={handleMessage}
         userAgent={`TaxiImpulseApp/1.0 (${Platform.OS})`}
         sharedCookiesEnabled
