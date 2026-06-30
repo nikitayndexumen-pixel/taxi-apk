@@ -15,11 +15,10 @@ import { WebView } from "react-native-webview";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Audio } from "expo-av";
 import * as Notifications from "expo-notifications";
+import { usePipMode, PipHandler } from "react-native-pip-mode";
 import type { WebViewNavigation } from "react-native-webview";
 
 const SITE_URL = "https://taxiimpulse.ru";
-const DRIVER_BUBBLE_CHANNEL = "driver-bubble";
-const DRIVER_BUBBLE_NOTIFICATION_ID = "driver-bubble-orders";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -36,15 +35,13 @@ const INJECTED_JS = `
     window.__TAXI_NATIVE_APP__ = true;
     window.__TAXI_APP_PLATFORM__ = '${Platform.OS}';
     document.documentElement.setAttribute('data-native-app', 'true');
-
-    var _OrigNotification = window.Notification;
-    function NativeNotification(title, options) {
+    var NativeNotification = function(title, options) {
       try {
         window.ReactNativeWebView && window.ReactNativeWebView.postMessage(
           JSON.stringify({ type: 'NOTIFICATION', title: title, body: (options && options.body) || '' })
         );
       } catch(e) {}
-    }
+    };
     NativeNotification.requestPermission = function() { return Promise.resolve('granted'); };
     NativeNotification.permission = 'granted';
     try { window.Notification = NativeNotification; } catch(e) {}
@@ -72,37 +69,6 @@ async function playNotificationSound() {
     sound.setOnPlaybackStatusUpdate((s) => {
       if (s.isLoaded && s.didJustFinish) sound.unloadAsync().catch(() => {});
     });
-  } catch (e) {}
-}
-
-async function showDriverBubbleNotification(count: number) {
-  if (Platform.OS !== "android") return;
-  try {
-    await Notifications.setNotificationChannelAsync(DRIVER_BUBBLE_CHANNEL, {
-      name: "Заказы водителя",
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0],
-      enableVibrate: false,
-      showBadge: true,
-    });
-
-    await Notifications.scheduleNotificationAsync({
-      identifier: DRIVER_BUBBLE_NOTIFICATION_ID,
-      content: {
-        title: count > 0 ? `🚕 ${count} ${ordersWord(count)} · Taxi Impulse` : "🚕 Taxi Impulse — ожидание заказов",
-        body: count > 0 ? "Нажмите чтобы открыть и принять заказ" : "Нажмите чтобы вернуться в приложение",
-        sound: false,
-        sticky: true,
-        data: { type: "driver_bubble" },
-      } as any,
-      trigger: null,
-    });
-  } catch {}
-}
-
-async function hideDriverBubbleNotification() {
-  try {
-    await Notifications.dismissNotificationAsync(DRIVER_BUBBLE_NOTIFICATION_ID);
   } catch {}
 }
 
@@ -110,6 +76,22 @@ function ordersWord(n: number): string {
   if (n % 10 === 1 && n % 100 !== 11) return "заказ";
   if ([2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100)) return "заказа";
   return "заказов";
+}
+
+function PipBubble({ count }: { count: number }) {
+  return (
+    <View style={styles.pipContainer}>
+      <Text style={styles.pipEmoji}>🚕</Text>
+      {count > 0 ? (
+        <>
+          <Text style={styles.pipCount}>{count}</Text>
+          <Text style={styles.pipLabel}>{ordersWord(count)}</Text>
+        </>
+      ) : (
+        <Text style={styles.pipLabel}>ожидание</Text>
+      )}
+    </View>
+  );
 }
 
 function WebViewScreen() {
@@ -122,7 +104,10 @@ function WebViewScreen() {
   const loadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const driverBubbleActiveRef = useRef(false);
-  const driverBubbleCountRef = useRef(0);
+  const [bubbleCount, setBubbleCount] = useState(0);
+
+  // PiP mode state (true when app is in PiP window)
+  const isPip = usePipMode();
 
   useEffect(() => {
     Notifications.requestPermissionsAsync().catch(() => {});
@@ -136,18 +121,17 @@ function WebViewScreen() {
       }).catch(() => {});
     }
     requestLocationPermission();
+
     const sub = AppState.addEventListener("change", (nextState) => {
-      // When app goes to background while driver bubble is active → show persistent notification
+      // When app goes to background while driver bubble is active → enter PiP mode
       if (
         appStateRef.current === "active" &&
-        nextState === "background" &&
+        (nextState === "background" || nextState === "inactive") &&
         driverBubbleActiveRef.current
       ) {
-        showDriverBubbleNotification(driverBubbleCountRef.current);
-      }
-      // When app comes back to foreground → hide the notification (driver is back in app)
-      if (appStateRef.current !== "active" && nextState === "active" && driverBubbleActiveRef.current) {
-        hideDriverBubbleNotification();
+        try {
+          PipHandler.enterPipMode(200, 300);
+        } catch {}
       }
       appStateRef.current = nextState;
     });
@@ -173,27 +157,21 @@ function WebViewScreen() {
         return;
       }
 
-      // Driver bubble activated — remember state
       if (msg.type === "DRIVER_BUBBLE_ACTIVE") {
         driverBubbleActiveRef.current = true;
-        driverBubbleCountRef.current = msg.count ?? 0;
+        setBubbleCount(msg.count ?? 0);
         return;
       }
 
-      // Order count updated — update notification if in background
       if (msg.type === "DRIVER_BUBBLE_UPDATE") {
-        driverBubbleCountRef.current = msg.count ?? 0;
-        if (appStateRef.current !== "active") {
-          showDriverBubbleNotification(driverBubbleCountRef.current);
-        }
+        const c = msg.count ?? 0;
+        setBubbleCount(c);
         return;
       }
 
-      // Driver bubble closed
       if (msg.type === "DRIVER_BUBBLE_HIDE") {
         driverBubbleActiveRef.current = false;
-        driverBubbleCountRef.current = 0;
-        hideDriverBubbleNotification();
+        setBubbleCount(0);
         return;
       }
     } catch {}
@@ -214,7 +192,11 @@ function WebViewScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="light-content" backgroundColor="#19063e" />
 
-      {loading && !error && (
+      {/* PiP overlay — shown when in mini-window mode */}
+      {isPip && <PipBubble count={bubbleCount} />}
+
+      {/* Normal UI */}
+      {!isPip && loading && !error && (
         <View style={styles.loadingOverlay}>
           <Text style={styles.loadingTitle}>TAXI IMPULSE</Text>
           <ActivityIndicator size="large" color="#7c3aed" style={{ marginTop: 24 }} />
@@ -222,11 +204,14 @@ function WebViewScreen() {
         </View>
       )}
 
-      {error && (
+      {!isPip && error && (
         <View style={styles.errorContainer}>
           <Text style={styles.errorTitle}>Нет соединения</Text>
           <Text style={styles.errorText}>Проверьте подключение к интернету</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={() => { setError(false); setLoading(true); webviewRef.current?.reload(); }}>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => { setError(false); setLoading(true); hasLoadedRef.current = false; webviewRef.current?.reload(); }}
+          >
             <Text style={styles.retryText}>Повторить</Text>
           </TouchableOpacity>
         </View>
@@ -235,7 +220,7 @@ function WebViewScreen() {
       <WebView
         ref={webviewRef}
         source={{ uri: SITE_URL }}
-        style={[styles.webview, error && styles.hidden]}
+        style={[styles.webview, (isPip || error) && styles.hidden]}
         injectedJavaScript={INJECTED_JS}
         javaScriptEnabled
         domStorageEnabled
@@ -245,7 +230,7 @@ function WebViewScreen() {
         mediaPlaybackRequiresUserAction={false}
         onNavigationStateChange={(nav: WebViewNavigation) => setCanGoBack(nav.canGoBack)}
         onLoadStart={() => {
-          if (hasLoadedRef.current) return; // after first load, don't block UI again
+          if (hasLoadedRef.current) return;
           setLoading(true);
           setError(false);
           if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
@@ -257,7 +242,11 @@ function WebViewScreen() {
           setLoading(false);
         }}
         onError={() => { setLoading(false); setError(!hasLoadedRef.current); }}
-        onHttpError={(e) => { if (e.nativeEvent.statusCode >= 500 && !hasLoadedRef.current) { setError(true); setLoading(false); } }}
+        onHttpError={(e) => {
+          if (e.nativeEvent.statusCode >= 500 && !hasLoadedRef.current) {
+            setError(true); setLoading(false);
+          }
+        }}
         onMessage={handleMessage}
         userAgent={`TaxiImpulseApp/1.0 (${Platform.OS})`}
         sharedCookiesEnabled
@@ -281,7 +270,24 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#19063e" },
   webview: { flex: 1, backgroundColor: "#08081a" },
-  hidden: { opacity: 0, flex: 0 },
+  hidden: { opacity: 0, flex: 0, height: 0 },
+
+  pipContainer: {
+    flex: 1,
+    backgroundColor: "#19063e",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  pipEmoji: { fontSize: 36 },
+  pipCount: {
+    fontSize: 40,
+    fontWeight: "800",
+    color: "#fff",
+    lineHeight: 44,
+  },
+  pipLabel: { fontSize: 14, color: "#ffffff99", fontWeight: "500" },
+
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "#19063e",
@@ -291,6 +297,7 @@ const styles = StyleSheet.create({
   },
   loadingTitle: { fontSize: 24, fontWeight: "700", color: "#fff", letterSpacing: 3 },
   loadingHint: { fontSize: 13, color: "#ffffff50", marginTop: 12 },
+
   errorContainer: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 12 },
   errorTitle: { fontSize: 20, fontWeight: "700", color: "#fff" },
   errorText: { fontSize: 14, color: "#ffffff50", textAlign: "center" },
