@@ -1,32 +1,21 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 import {
-  StyleSheet,
-  View,
-  ActivityIndicator,
-  Text,
-  TouchableOpacity,
-  Platform,
-  BackHandler,
-  StatusBar,
-  AppState,
-  PermissionsAndroid,
+  StyleSheet, View, ActivityIndicator, Text, TouchableOpacity,
+  Platform, BackHandler, StatusBar, AppState, PermissionsAndroid, NativeModules,
 } from "react-native";
 import { WebView } from "react-native-webview";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Audio } from "expo-av";
 import * as Notifications from "expo-notifications";
-import { usePipMode, PipHandler } from "react-native-pip-mode";
 import type { WebViewNavigation } from "react-native-webview";
 
 const SITE_URL = "https://taxiimpulse.ru";
+const { FloatingBubble } = NativeModules;
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
+    shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: true,
+    shouldShowBanner: true, shouldShowList: true,
   }),
 });
 
@@ -35,16 +24,13 @@ const INJECTED_JS = `
     window.__TAXI_NATIVE_APP__ = true;
     window.__TAXI_APP_PLATFORM__ = '${Platform.OS}';
     document.documentElement.setAttribute('data-native-app', 'true');
-    var NativeNotification = function(title, options) {
-      try {
-        window.ReactNativeWebView && window.ReactNativeWebView.postMessage(
-          JSON.stringify({ type: 'NOTIFICATION', title: title, body: (options && options.body) || '' })
-        );
-      } catch(e) {}
+    var N = function(title, opts) {
+      try { window.ReactNativeWebView && window.ReactNativeWebView.postMessage(
+        JSON.stringify({ type: 'NOTIFICATION', title: title, body: (opts && opts.body) || '' })); } catch(e){}
     };
-    NativeNotification.requestPermission = function() { return Promise.resolve('granted'); };
-    NativeNotification.permission = 'granted';
-    try { window.Notification = NativeNotification; } catch(e) {}
+    N.requestPermission = function() { return Promise.resolve('granted'); };
+    N.permission = 'granted';
+    try { window.Notification = N; } catch(e) {}
   })();
   true;
 `;
@@ -72,28 +58,6 @@ async function playNotificationSound() {
   } catch {}
 }
 
-function ordersWord(n: number): string {
-  if (n % 10 === 1 && n % 100 !== 11) return "заказ";
-  if ([2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100)) return "заказа";
-  return "заказов";
-}
-
-function PipBubble({ count }: { count: number }) {
-  return (
-    <View style={styles.pipContainer}>
-      <Text style={styles.pipEmoji}>🚕</Text>
-      {count > 0 ? (
-        <>
-          <Text style={styles.pipCount}>{count}</Text>
-          <Text style={styles.pipLabel}>{ordersWord(count)}</Text>
-        </>
-      ) : (
-        <Text style={styles.pipLabel}>ожидание</Text>
-      )}
-    </View>
-  );
-}
-
 function WebViewScreen() {
   const insets = useSafeAreaInsets();
   const webviewRef = useRef<WebView>(null);
@@ -103,11 +67,7 @@ function WebViewScreen() {
   const hasLoadedRef = useRef(false);
   const loadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const appStateRef = useRef(AppState.currentState);
-  const driverBubbleActiveRef = useRef(false);
-  const [bubbleCount, setBubbleCount] = useState(0);
-
-  // PiP mode state (true when app is in PiP window)
-  const isPip = usePipMode();
+  const bubbleActiveRef = useRef(false);
 
   useEffect(() => {
     Notifications.requestPermissionsAsync().catch(() => {});
@@ -122,18 +82,13 @@ function WebViewScreen() {
     }
     requestLocationPermission();
 
-    const sub = AppState.addEventListener("change", (nextState) => {
-      // When app goes to background while driver bubble is active → enter PiP mode
-      if (
-        appStateRef.current === "active" &&
-        (nextState === "background" || nextState === "inactive") &&
-        driverBubbleActiveRef.current
-      ) {
-        try {
-          PipHandler.enterPipMode(200, 300);
-        } catch {}
-      }
-      appStateRef.current = nextState;
+    // Check + request overlay permission on first launch
+    FloatingBubble?.hasPermission?.((has: boolean) => {
+      if (!has) FloatingBubble?.requestPermission?.();
+    });
+
+    const sub = AppState.addEventListener("change", (next) => {
+      appStateRef.current = next;
     });
     return () => sub.remove();
   }, []);
@@ -146,32 +101,32 @@ function WebViewScreen() {
         await playNotificationSound();
         if (appStateRef.current !== "active") {
           await Notifications.scheduleNotificationAsync({
-            content: {
-              title: msg.title || "Taxi Impulse",
-              body: msg.body || "",
-              sound: "notification.mp3",
-            },
+            content: { title: msg.title || "Taxi Impulse", body: msg.body || "", sound: "notification.mp3" },
             trigger: null,
           });
         }
         return;
       }
 
+      // Activate floating bubble service (real overlay over other apps)
       if (msg.type === "DRIVER_BUBBLE_ACTIVE") {
-        driverBubbleActiveRef.current = true;
-        setBubbleCount(msg.count ?? 0);
+        bubbleActiveRef.current = true;
+        FloatingBubble?.start?.(msg.count ?? 0);
         return;
       }
 
+      // Update count in the floating overlay
       if (msg.type === "DRIVER_BUBBLE_UPDATE") {
-        const c = msg.count ?? 0;
-        setBubbleCount(c);
+        if (bubbleActiveRef.current) {
+          FloatingBubble?.update?.(msg.count ?? 0);
+        }
         return;
       }
 
+      // Hide floating overlay
       if (msg.type === "DRIVER_BUBBLE_HIDE") {
-        driverBubbleActiveRef.current = false;
-        setBubbleCount(0);
+        bubbleActiveRef.current = false;
+        FloatingBubble?.stop?.();
         return;
       }
     } catch {}
@@ -192,11 +147,7 @@ function WebViewScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="light-content" backgroundColor="#19063e" />
 
-      {/* PiP overlay — shown when in mini-window mode */}
-      {isPip && <PipBubble count={bubbleCount} />}
-
-      {/* Normal UI */}
-      {!isPip && loading && !error && (
+      {loading && !error && (
         <View style={styles.loadingOverlay}>
           <Text style={styles.loadingTitle}>TAXI IMPULSE</Text>
           <ActivityIndicator size="large" color="#7c3aed" style={{ marginTop: 24 }} />
@@ -204,14 +155,15 @@ function WebViewScreen() {
         </View>
       )}
 
-      {!isPip && error && (
+      {!loading && error && (
         <View style={styles.errorContainer}>
           <Text style={styles.errorTitle}>Нет соединения</Text>
           <Text style={styles.errorText}>Проверьте подключение к интернету</Text>
-          <TouchableOpacity
-            style={styles.retryBtn}
-            onPress={() => { setError(false); setLoading(true); hasLoadedRef.current = false; webviewRef.current?.reload(); }}
-          >
+          <TouchableOpacity style={styles.retryBtn} onPress={() => {
+            setError(false); setLoading(true);
+            hasLoadedRef.current = false;
+            webviewRef.current?.reload();
+          }}>
             <Text style={styles.retryText}>Повторить</Text>
           </TouchableOpacity>
         </View>
@@ -220,7 +172,7 @@ function WebViewScreen() {
       <WebView
         ref={webviewRef}
         source={{ uri: SITE_URL }}
-        style={[styles.webview, (isPip || error) && styles.hidden]}
+        style={[styles.webview, error && styles.hidden]}
         injectedJavaScript={INJECTED_JS}
         javaScriptEnabled
         domStorageEnabled
@@ -231,8 +183,7 @@ function WebViewScreen() {
         onNavigationStateChange={(nav: WebViewNavigation) => setCanGoBack(nav.canGoBack)}
         onLoadStart={() => {
           if (hasLoadedRef.current) return;
-          setLoading(true);
-          setError(false);
+          setLoading(true); setError(false);
           if (loadingTimerRef.current) clearTimeout(loadingTimerRef.current);
           loadingTimerRef.current = setTimeout(() => setLoading(false), 8000);
         }}
@@ -271,33 +222,12 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#19063e" },
   webview: { flex: 1, backgroundColor: "#08081a" },
   hidden: { opacity: 0, flex: 0, height: 0 },
-
-  pipContainer: {
-    flex: 1,
-    backgroundColor: "#19063e",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-  },
-  pipEmoji: { fontSize: 36 },
-  pipCount: {
-    fontSize: 40,
-    fontWeight: "800",
-    color: "#fff",
-    lineHeight: 44,
-  },
-  pipLabel: { fontSize: 14, color: "#ffffff99", fontWeight: "500" },
-
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#19063e",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 10,
+    ...StyleSheet.absoluteFillObject, backgroundColor: "#19063e",
+    alignItems: "center", justifyContent: "center", zIndex: 10,
   },
   loadingTitle: { fontSize: 24, fontWeight: "700", color: "#fff", letterSpacing: 3 },
   loadingHint: { fontSize: 13, color: "#ffffff50", marginTop: 12 },
-
   errorContainer: { flex: 1, alignItems: "center", justifyContent: "center", padding: 40, gap: 12 },
   errorTitle: { fontSize: 20, fontWeight: "700", color: "#fff" },
   errorText: { fontSize: 14, color: "#ffffff50", textAlign: "center" },
