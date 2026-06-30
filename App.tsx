@@ -9,6 +9,7 @@ import {
   BackHandler,
   StatusBar,
   AppState,
+  PermissionsAndroid,
 } from "react-native";
 import { WebView } from "react-native-webview";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -49,6 +50,16 @@ const INJECTED_JS = `
   true;
 `;
 
+async function requestLocationPermission() {
+  if (Platform.OS !== "android") return;
+  try {
+    await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+    ]);
+  } catch {}
+}
+
 async function playNotificationSound() {
   try {
     await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
@@ -81,6 +92,7 @@ function WebViewScreen() {
         enableVibrate: true,
       }).catch(() => {});
     }
+    requestLocationPermission();
     const sub = AppState.addEventListener("change", (s) => { appStateRef.current = s; });
     return () => sub.remove();
   }, []);
@@ -144,6 +156,7 @@ function WebViewScreen() {
         injectedJavaScript={INJECTED_JS}
         javaScriptEnabled
         domStorageEnabled
+        geolocationEnabled
         allowsBackForwardNavigationGestures
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
