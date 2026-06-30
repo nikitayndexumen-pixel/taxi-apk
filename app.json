@@ -55,7 +55,7 @@
           ]
         }
       ],
-      "react-native-pip-mode"
+      "./plugins/withFloatingBubble"
     ]
   }
 }
