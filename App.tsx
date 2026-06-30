@@ -18,6 +18,8 @@ import * as Notifications from "expo-notifications";
 import type { WebViewNavigation } from "react-native-webview";
 
 const SITE_URL = "https://taxiimpulse.ru";
+const DRIVER_BUBBLE_CHANNEL = "driver-bubble";
+const DRIVER_BUBBLE_NOTIFICATION_ID = "driver-bubble-orders";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -73,6 +75,43 @@ async function playNotificationSound() {
   } catch (e) {}
 }
 
+async function showDriverBubbleNotification(count: number) {
+  if (Platform.OS !== "android") return;
+  try {
+    await Notifications.setNotificationChannelAsync(DRIVER_BUBBLE_CHANNEL, {
+      name: "Заказы водителя",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0],
+      enableVibrate: false,
+      showBadge: true,
+    });
+
+    await Notifications.scheduleNotificationAsync({
+      identifier: DRIVER_BUBBLE_NOTIFICATION_ID,
+      content: {
+        title: count > 0 ? `🚕 ${count} ${ordersWord(count)} · Taxi Impulse` : "🚕 Taxi Impulse — ожидание заказов",
+        body: count > 0 ? "Нажмите чтобы открыть и принять заказ" : "Нажмите чтобы вернуться в приложение",
+        sound: false,
+        sticky: true,
+        data: { type: "driver_bubble" },
+      } as any,
+      trigger: null,
+    });
+  } catch {}
+}
+
+async function hideDriverBubbleNotification() {
+  try {
+    await Notifications.dismissNotificationAsync(DRIVER_BUBBLE_NOTIFICATION_ID);
+  } catch {}
+}
+
+function ordersWord(n: number): string {
+  if (n % 10 === 1 && n % 100 !== 11) return "заказ";
+  if ([2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100)) return "заказа";
+  return "заказов";
+}
+
 function WebViewScreen() {
   const insets = useSafeAreaInsets();
   const webviewRef = useRef<WebView>(null);
@@ -80,6 +119,8 @@ function WebViewScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const appStateRef = useRef(AppState.currentState);
+  const driverBubbleActiveRef = useRef(false);
+  const driverBubbleCountRef = useRef(0);
 
   useEffect(() => {
     Notifications.requestPermissionsAsync().catch(() => {});
@@ -93,13 +134,28 @@ function WebViewScreen() {
       }).catch(() => {});
     }
     requestLocationPermission();
-    const sub = AppState.addEventListener("change", (s) => { appStateRef.current = s; });
+    const sub = AppState.addEventListener("change", (nextState) => {
+      // When app goes to background while driver bubble is active → show persistent notification
+      if (
+        appStateRef.current === "active" &&
+        nextState === "background" &&
+        driverBubbleActiveRef.current
+      ) {
+        showDriverBubbleNotification(driverBubbleCountRef.current);
+      }
+      // When app comes back to foreground → hide the notification (driver is back in app)
+      if (appStateRef.current !== "active" && nextState === "active" && driverBubbleActiveRef.current) {
+        hideDriverBubbleNotification();
+      }
+      appStateRef.current = nextState;
+    });
     return () => sub.remove();
   }, []);
 
   const handleMessage = useCallback(async (event: { nativeEvent: { data: string } }) => {
     try {
       const msg = JSON.parse(event.nativeEvent.data);
+
       if (msg.type === "NOTIFICATION") {
         await playNotificationSound();
         if (appStateRef.current !== "active") {
@@ -112,6 +168,31 @@ function WebViewScreen() {
             trigger: null,
           });
         }
+        return;
+      }
+
+      // Driver bubble activated — remember state
+      if (msg.type === "DRIVER_BUBBLE_ACTIVE") {
+        driverBubbleActiveRef.current = true;
+        driverBubbleCountRef.current = msg.count ?? 0;
+        return;
+      }
+
+      // Order count updated — update notification if in background
+      if (msg.type === "DRIVER_BUBBLE_UPDATE") {
+        driverBubbleCountRef.current = msg.count ?? 0;
+        if (appStateRef.current !== "active") {
+          showDriverBubbleNotification(driverBubbleCountRef.current);
+        }
+        return;
+      }
+
+      // Driver bubble closed
+      if (msg.type === "DRIVER_BUBBLE_HIDE") {
+        driverBubbleActiveRef.current = false;
+        driverBubbleCountRef.current = 0;
+        hideDriverBubbleNotification();
+        return;
       }
     } catch {}
   }, []);
