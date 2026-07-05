@@ -1,12 +1,13 @@
 {
   "expo": {
     "name": "Taxi Impulse",
-    "slug": "taxi-impulse-app",
+    "slug": "taxi-impulse-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "taxiimpulse",
+    "scheme": "taxi-impulse-mobile",
     "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/splash.png",
       "resizeMode": "contain",
@@ -16,9 +17,6 @@
       "supportsTablet": false,
       "bundleIdentifier": "ru.taxiimpulse.app",
       "infoPlist": {
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true
-        },
         "NSLocationWhenInUseUsageDescription": "Приложение использует геолокацию для определения вашего местоположения при заказе такси.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Приложение использует геолокацию для определения вашего местоположения при заказе такси."
       }
@@ -30,21 +28,27 @@
         "backgroundColor": "#19063e"
       },
       "permissions": [
-        "android.permission.INTERNET",
-        "android.permission.ACCESS_NETWORK_STATE",
-        "android.permission.VIBRATE",
-        "android.permission.POST_NOTIFICATIONS",
-        "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION"
-      ],
-      "allowBackup": false
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://replit.com/"
+        }
+      ],
       "expo-font",
+      "expo-web-browser",
       [
         "expo-notifications",
         {
@@ -55,7 +59,19 @@
           ]
         }
       ],
-      "./plugins/withFloatingBubble"
-    ]
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Taxi Impulse использует геолокацию, чтобы передавать ваше местоположение пассажирам, пока вы на линии — даже когда приложение свёрнуто.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ],
+      "./plugins/withFloatingBubble.js"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
   }
 }
